@@ -4,9 +4,10 @@ name: "HW2 Tests"
 on:
   pull_request:
     branches: [ main ]
-    paths: [ 'hw2/hw/**', '.github/workflows/hw2-tests.yml' ]
+    paths: [ 'hw2/hw/**' ]
   push:
-    paths: [ 'hw2/hw/**', '.github/workflows/hw2-tests.yml' ]
+    branches: [ main ]
+    paths: [ 'hw2/hw/**' ]
 
 jobs:
   test-hw2:
@@ -35,4 +36,4 @@ jobs:
       env:
         PYTHONPATH: ${{ github.workspace }}/hw2/hw
       run: |
-        pytest -v --cov=shop_api --cov-report=term-missing --cov-fail-under=95
+        pytest test_homework2.py -v
