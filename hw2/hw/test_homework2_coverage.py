@@ -125,7 +125,7 @@ def test_deleted_item_list_and_update_rules() -> None:
     item_id = item["id"]
     assert client.delete(f"/item/{item_id}").status_code == 200
 
-    visible_items = client.get("/item").json()
+    visible_items = client.get("/item", params={"limit": 1_000}).json()
     deleted_items = client.get(
         "/item", params={"show_deleted": "true", "limit": 1_000}
     ).json()
@@ -161,6 +161,78 @@ def test_chat_broadcasts_to_same_room_and_cleans_up_connections() -> None:
                 assert re.fullmatch(r"[0-9a-f]{8}", username)
                 assert message == "hello from coverage"
 
+    assert room_name not in chat_rooms
+    assert other_room not in chat_rooms
+
+
+class _RoomBarrier:
+    def __init__(self, participant_count: int) -> None:
+        self.participant_count = participant_count
+        self.arrived = 0
+        self.ready = asyncio.Event()
+
+    async def wait(self) -> None:
+        self.arrived += 1
+        if self.arrived == self.participant_count:
+            self.ready.set()
+        await self.ready.wait()
+
+
+class _CoordinatedSocket:
+    def __init__(
+        self,
+        barrier: _RoomBarrier,
+        finished: asyncio.Event,
+        message: str | None = None,
+    ) -> None:
+        self.barrier = barrier
+        self.finished = finished
+        self.message = message
+        self.connected = False
+        self.sent_messages: list[str] = []
+
+    async def accept(self) -> None:
+        pass
+
+    async def receive_text(self) -> str:
+        if not self.connected:
+            self.connected = True
+            await self.barrier.wait()
+            if self.message is not None:
+                return self.message
+            await self.finished.wait()
+        else:
+            self.finished.set()
+        raise WebSocketDisconnect(code=1000)
+
+    async def send_text(self, message: str) -> None:
+        self.sent_messages.append(message)
+
+
+def test_chat_does_not_cross_rooms_or_echo_to_sender() -> None:
+    room_name = f"source-{uuid4().hex}"
+    other_room = f"destination-{uuid4().hex}"
+    barrier = _RoomBarrier(participant_count=3)
+    finished = asyncio.Event()
+    sender = _CoordinatedSocket(barrier, finished, message="private room message")
+    same_room_peer = _CoordinatedSocket(barrier, finished)
+    other_room_peer = _CoordinatedSocket(barrier, finished)
+
+    async def run_chat_connections() -> None:
+        await asyncio.gather(
+            chat(sender, room_name),
+            chat(same_room_peer, room_name),
+            chat(other_room_peer, other_room),
+        )
+
+    asyncio.run(run_chat_connections())
+
+    assert sender.sent_messages == []
+    assert other_room_peer.sent_messages == []
+    assert len(same_room_peer.sent_messages) == 1
+    username, message = same_room_peer.sent_messages[0].split(" :: ", maxsplit=1)
+    assert re.fullmatch(r"[0-9a-f]{8}", username)
+    assert message == "private room message"
     assert room_name not in chat_rooms
     assert other_room not in chat_rooms
 
